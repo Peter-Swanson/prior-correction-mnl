@@ -1,0 +1,358 @@
+% To use knitr in RStudio:
+  % 1. setwd() to wherever files should be saved
+    % setwd("C:/Users/Peter/OneDrive/github/prior_correction_MNL/notes")
+  % 2. Tools - Global Options - Set Default working directory (when
+    % not in a project)    to match your working directory for
+  % 3. Tools - global options - Sweave - Weave Rnv files using : knitr
+  % 4. File - new file - R Sweave
+% To use BIBTEX
+  % 1. Create a file 'references.bib' in the working directory
+  % 2. use pre-specified bibtex formats for references
+  % 3. change setwd() in the first chunk under first \section
+% NOTE: pdf.options(useDingbats=TRUE)  -> makes PDF take up less space bc uses non-vector images?
+ 
+\documentclass{article}
+\usepackage{graphicx}
+\usepackage{fullpage}  %set margins to 1"
+\usepackage{booktabs}  %for tables \cmidrule
+\usepackage{fancyvrb}  %used for text boxes
+\usepackage{sectsty}  %change size of section fonts
+\usepackage{amsmath, amsthm, amssymb}       %used for equations \begin{align}
+\usepackage{upgreek}
+ 
+% Please add the following required packages to your document preamble:
+% \usepackage{graphicx}
+\usepackage[normalem]{ulem}
+\useunder{\uline}{\ul}{}
+ 
+ 
+\usepackage[hidelinks]{hyperref}
+\usepackage[backend=bibtex, sorting=none]{biblatex}
+\bibliography{references}
+ 
+\theoremstyle{definition}
+\newtheorem{exmp}{Example}[section] %Define Example
+ 
+\author{P. Swanson}
+\title{Notes on Extending Prior Correction to Multinomial Logit Models}
+\date{\today}
+ 
+  \addtolength{\oddsidemargin}{-.3in}  %width
+  \addtolength{\evensidemargin}{-.1in}
+                \addtolength{\textwidth}{.5in}
+ 
+                \addtolength{\topmargin}{-.5in}
+                \addtolength{\textheight}{1.2in}
+ 
+\sectionfont{\normalsize}
+\subsectionfont{\normalsize}
+\subsubsectionfont{\normalsize}
+ 
+ 
+\begin{document}
+ 
+\maketitle  %command to create title
+%\renewcommand\thesubsection{\alph{subsection}} %letter subsections
+\tableofcontents
+ 
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%   Introduction    %%%%
+\section{Introduction}
+ 
+<<setup, include=FALSE, cache=FALSE, echo=FALSE>>=
+pdf.options(useDingbats = TRUE)   # makes pdf smaller
+opts_chunk$set(fig.path='figures/plots-', fig.align='center', fig.show='hold', eval=TRUE, echo=TRUE)
+options(replace.assign=TRUE,width=80)
+setwd("C:/Users/Peter/OneDrive/github/prior_correction_MNL/notes")
+Sys.setenv(TEXINPUTS=getwd(),
+BIBINPUTS=getwd(),
+BSTINPUTS=getwd())
+@
+ 
+When modeling low event rate data with logistic regression, it is common to use stratified sampling on the target variable, $Y$. This could mean taking all of the cases where $Y=1$, and a random sample of the cases where $Y=0$ to build a modeling dataset. This new dataset would have the wrong marginal distribution of the target, and unadjusted logistic regression models would overpredict $P(Y=1)$. Fortunately, this is easily remedied by {\bf prior correction} where we essentially add a correction factor to the linear component of the logistic regression model. This correction factor only needs the marginal distribution of the target variable as it was run through the model (posteriors) and the ``true" population (prior) distribution of the target. In practice, the priors are often estimated from the data before sampling.
+
+This process allows us to ``correct", ``adjust", ``calibrate", or ``tune" any logistic regression model to any prior distribution of $Y$. For example, in credit risk, we can use it to calibrate a logistic regression model to any pre-specified default rate.
+
+These notes extend prior correction to multinomial logistic regression which allows us to apply the method to many commonly used discrete choice models including transition matrices and competing risks survival models.
+
+Additionally, a method is proposed for calculating prior probabilities from an incomplete vector of pre-specified probabilities by making adjustments to the observed marginals in the model build data. For example, we may have models predicting five levels: default, payoff, upgrade, downgrade, no-change, but we may only want to calibrate a model's default rate. The method proposed below allows an analyst to specify prior probabilities for any of the levels, and automatically calculates the others in a consistent way that keeps the sum of the probabilities equal to one. 
+
+An example of both methods is included using simulated data.
+
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%   Multinomial Logistic Regression    %%%%
+\section{Multinomial Logistic Regression}
+Let outcome $Y$ be a discrete random variable with $j=1,\dots, J$ levels and density $P(Y)$. Let $J$ be the ``reference" category. Let $X$ be a vector of any random variables. Then the standard multinomial logistic regression model is given by
+ 
+\begin{equation}
+P(Y=j |X) = \frac{e^{X \upbeta_j}}{ \sum_{k=1}^{J} e^{X\upbeta_k}} \label{softmax}
+\end{equation}
+ 
+\noindent where $\upbeta_j$ is a vector of regression coefficients that define a linear combination of $X$ to estimate the relationship between $P(Y=j)$ and $P(Y=J)$. Equation \ref{softmax} can also be expressed as $J-1$ binary regression models with $J$ as the reference category \cite{agresti2013, hosmer2013applied}.
+ 
+\begin{equation}
+\ln \left[\frac{P(Y=j|X)}{P(Y=J|X)}\right] = X \upbeta_j , \quad j=1,\dots, J-1  \label{binaryMNL}
+\end{equation}
+ 
+\noindent which implies that the left-hand side of \ref{binaryMNL} is equal to the log-odds of the conditional probability, $P(Y=j|P(Y=j) \cup P(Y=J))$. From equation \ref{binaryMNL},
+ 
+\begin{equation}
+P(Y=j|X)=P(Y=J|X)e^{X\upbeta_j}  \label{mnl_from_bnl1}
+\end{equation}
+ 
+\noindent and since $\sum_{j=1}^{J} P(Y=j|X)=1$,
+ 
+\begin{align}
+P(Y=J|X) &= 1 - \sum_{j=1}^{J-1}P(Y=J|X)e^{X\upbeta_j} \notag \\
+1 &= P(Y=J|X)^{-1} - \sum_{j=1}^{J-1}e^{X\upbeta_j} \notag \\
+P(Y=J|X) &= \frac{1}{1+\sum_{j=1}^{J-1}e^{X\upbeta_j}} \label{mnl_from_bnl2}
+\end{align}
+ 
+\noindent Then using \ref{mnl_from_bnl2} in \ref{mnl_from_bnl1}
+ 
+\begin{equation}
+P(Y=j|X) = \frac{e^{X\upbeta_j}}{1 + \sum_{j=1}^{J-1}e^{X\upbeta_j}}  \label{mnl_from_bnl3}
+\end{equation}
+ 
+To see the relationship between \ref{mnl_from_bnl3} and \ref{softmax} (softmax), note
+ 
+\begin{equation}
+e^{X\upbeta_J} = \log \left[\frac{P(Y=J|X)}{P(Y=J|X)}\right] = 1
+\end{equation}
+ 
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%   Prior Correction for Binary Logit Models   %%%%
+\section{Prior Correction for Binary Logit Models}
+Outcome-dependent sampling refers to a sampling method applied to the dependent variable that results in different marginal probabilities between the population, $P(Y=j)$, and the sample, $P(y=j)$. It is also known as oversampling, biased sampling, choice-based sampling, and stratified sampling. When modeling rare-events data with binary logistic regression, it is common to sample all of the observations where $Y=1$, and a simple random sample of the observations where $Y=0$. With the appropriate statistical correction, analyses using this selection scheme can be consistent and efficient.
+ 
+One common method is {\bf prior correction} where we correct the posterior probabilities from the sample used to build a model, $P(y)$, to the prior probabilities, $P(Y)$, (assumed known) from the population. This is done by adding a correction factor to the linear component, $X\upbeta$ of a logistic regression model. Although its often attributed to others, King and Zeng (2001) provide a derivation for binary logit models \cite{king2001logistic}. These notes adapt their notation and extend it to the multinomial case.
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% General Derivation
+\subsection{General Derivation}
+Let $X,Y$ be random variables with density $P(X,Y)$ and let $x,y$ be random variables with density $P(x,y)$. Define $P(x,y)$ by subsampling such that $P(X|Y)=P(x|y)$. In the case where $Y$ is discrete, this is equivalent to taking a stratified random sample on $Y$. Note, this does not imply that $P(Y)$, $P(X)$, or $P(Y|X)$ equal $P(y)$, $P(x)$, or $P(y|x)$ respectively. The goal is to use $P(y|x)$ to make inferences about $P(Y|X)$. We use the definitions of conditional probability and joint probability to find
+ 
+\begin{align}
+P(Y|X) &= \frac{P(XY)}{P(X)} \notag \\
+&= \frac{P(X|Y)P(Y)}{P(X)} \notag \\
+&= \frac{P(xy)}{P(y)} \frac{P(Y)}{P(X)} \notag \\
+&= \frac{P(y|x)P(x)}{P(y)} \frac{P(Y)}{P(X)} \notag \\
+&= P(y|x) \left[ \frac{P(Y)}{P(y)} \frac{P(x)}{P(X)} \right] \label{b1}
+\end{align}
+ 
+The implication is that we can make inferences about $P(Y|X)$ using $P(y|x)$ and some correction factor given by the bracketed term in \ref{b1}. King and Zeng (2001) then show the factor is consistent by proving convergence in distribution. Let $D$ and $d$ be random samples of size $n$ from $P(X,Y)$ and $P(x,y)$, respectively. Then as $n \rightarrow \infty$,
+ 
+\begin{equation}
+P(Y|X, D) = P(X|Y, D)\frac{P(Y|D)}{P(X|D)} \xrightarrow{d} P(X|Y)\frac{P(Y)}{P(X)} = P(Y|X) \notag
+\end{equation}
+ 
+Note $P(y|x, d) \overset{d}{\nrightarrow} P(Y|X)$, however, let $A_y=P(Y|D)/P(y|d)$ be a function of $y$ and $B=P(x|d)/P(X|D)= \left[\sum_{y} P(y|x,d)A_y  \right]^{-1}$ be a constant normalization factor
+ 
+\begin{align}
+P(y|x,d)A_yB &= P(x|y,d)\frac{P(y|d)}{P(x|d)}A_yB \notag \\
+&= P(x|y,d)\frac{P(y|d)}{P(x|d)} \frac{P(Y|D)}{P(y|d)} \frac{P(x|d)}{P(X|D)} \notag \\
+&=P(x|y,d)\frac{P(Y|D)}{P(X|D)} \notag \\
+&\xrightarrow{d} \frac{P(X|Y)P(Y)}{P(X)} \notag \\
+&= P(Y|X) \notag
+\end{align}
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Finite Discrete Choice Models
+\subsection{Finite Discrete Choice Models}
+Let $Y$ be a discrete random variable, and specify the conditional distribution $P(Y=j|X)$ for $j=1,\dots,J$ for finite $J$. Let $P(Y=j|D)=\tau_j$, which is assumed known either from some knowledge of the true population distribution or from the observed distribution, $D$. Let $P(y=j|d)=\bar{y}_j$ be known or be estimated from the observed distribution, $d$. The correction factors are then $A_j = \tau_j/\bar{y}_j$ and $B^{-1}=\sum_{j=1}^{J}P(y=j|x,d)\tau_j / \bar{y}_j$. The sample estimate is
+ 
+\begin{equation}
+P(y=j|x,d)A_jB = \frac{P(y=j|x,d)\tau_j / \bar{y}_j}{\sum_{k=1}^{J}P(y=k|x,d)\tau_k / \bar{y}_k} \xrightarrow{d} P(Y=j|X) \label{pc_discrete_y}
+\end{equation}
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Binary Models
+\subsection{Binary Models}
+For Binary models, there are only two levels, so for $Y \in \{0,1\}$ we have $P(Y=1)=\tau$, and $P(y=1)=\bar{y}$. This implies
+\begin{align}
+A_1 &= \tau/\bar{y} \notag \\
+A_0 &= (1-\tau) / (1-\bar{y}) \notag
+\end{align}
+and
+$$ B^{-1} = P(y=1|x,d) \tau/\bar{y} + (1- P(y=1|x,d)) \left[ \frac{1-\tau}{1-\bar{y}} \right]$$
+which gives
+\begin{align}
+P(y=1|x,d)A_1B &= \frac{P(y=1|x,d)\frac{\tau}{\bar{y}}}{ P(y=1|x,d)\frac{\tau}{\bar{y}} + (1- P(y=1|x,d))\frac{1-\tau}{1-\bar{y}}} \notag \\
+&= \frac{\frac{\tau}{\bar{y}}}{  (\frac{\tau}{\bar{y}}) + \left( (P(y=1|x,d)^{-1} - 1) \right) \frac{1-\tau}{1-\bar{y}}} \notag \\
+&= \left[ 1 + \left(P(y=1|x,d)^{-1} - 1 \right) \left( \frac{1-\tau}{\tau} \right) \left( \frac{\bar{y}}{1-\bar{y}} \right) \right]^{-1} \label{binarymod}
+\end{align}
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Logistic Regression
+\subsection{Logistic Regression}
+The logit model is $P(y=1|x,d) = 1/(1+e^{-x_i\upbeta})$, which we substitute into \ref{binarymod} to find
+ 
+\begin{align}
+P(y=1|x,d)A_1B &= \left[ 1 + \left(1 + e^{-x_i\upbeta} - 1 \right) \left( \frac{1-\tau}{\tau} \right) \left( \frac{\bar{y}}{1-\bar{y}} \right) \right]^{-1} \notag \\
+&= \left[ 1 + \left( \frac{1-\tau}{\tau} \right) \left( \frac{\bar{y}}{1-\bar{y}} \right) e^{-x_i\upbeta} \right]^{-1} \notag \\
+&= \left[1 + e^{\ln \left[ \left( \frac{1-\tau}{\tau} \right) \left( \frac{\bar{y}}{1-\bar{y}} \right) \right]}e^{-x_i\upbeta} \right]^{-1} \notag \\
+&= \frac{1}{1+e^{-x_i\upbeta + \ln \left[ \left( \frac{1-\tau}{\tau} \right) \left( \frac{\bar{y}}{1-\bar{y}} \right) \right]}}
+\end{align}
+ 
+which shows that for logistic regression, the posterior (modeled) probabilities can be corrected using the prior probabilities by adding the constant correction factor, $\ln \left[ \left( \frac{1-\tau}{\tau} \right) \left( \frac{\bar{y}}{1-\bar{y}} \right) \right]$ to the linear component of the model.
+ 
+ 
+%%%%%%%%%%%%%%%   Extending Prior Correction to Multinomial Logit Models   %%%%
+\section{Extending Prior Correction to Multinomial Logit Models}
+This section extends the derivation in King and Zeng (2001) to multinomial logistic regression models where $Y \in \{1, \dots ,J\}$ and $J$ is the ``reference" category. Notation is consistent with King and Zeng (2001), and the derivation picks off from Equation \ref{pc_discrete_y}:
+ 
+\begin{align}
+P(y=j|x,d)A_jB &= \frac{P(y=j|x,d)\tau_j / \bar{y}_j}{\sum_{k=1}^{J}P(y=k|x,d)\tau_k / \bar{y}_k} \notag \\
+&=\frac{P(y=j|x,d)A_j}{\sum_{k=1}^{J}P(y=k|x,d)A_k} \notag \\
+&=\frac{\frac{P(y=j|x,d)A_j}{P(y=J|x,d)A_J} }
+       {\sum_{k=1}^{J} \frac{P(y=k|x,d)A_k}{P(y=J|x,d)A_J} }
+\end{align}
+ 
+Since multinomial logistic regression can be expressed in terms of $J$ binary models, $\ln\left( \frac{P(y=j|x)}{P(y=J|x)} \right) = X\upbeta_j$ (see Equation \ref{binaryMNL}), we make the substitution
+ 
+\begin{align}
+P(y=j|x,d)A_jB &= \frac{\frac{A_j}{A_J}e^{X\upbeta_j}  }{\sum_{k=1}^J \frac{A_k}{A_J}e^{X\upbeta_k}} \notag \\
+&= \frac{e^{X\upbeta_j + \ln(A_j/A_J)} }
+        {\sum_{k=1}^{J} e^{X\upbeta_k + \ln(A_k/A_J)} } \label{MNL_prior_corrected}
+\end{align}
+ 
+In this form, the posterior multinomial probabilities for each $P(y=j|x)$ can be adjusted by applying a correction factor to each of the $j=1$ linear models that comprise the multinomial logit. This correction allows us to make inferences about $P(Y=j|X)$ using only the model from the sampled data, $d$. In other words, if we have the prior probabilities, $P(Y=j)$, already defined, and we have the observed marginal distribution from the data we built a model on, $P(y=j)$, we can use these marginals to ``correct" the posterior to pre-specified prior probabilities.
+ 
+Note that $\ln\left( \frac{P(y=J|x)}{P(y=J|x)} \right) = X\upbeta_j = 0$ which means $\upbeta_J=0$
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Specifying Prior Probabilities %%%%
+\section{Specifying Prior Probabilities} \label{sect_priorprobs}
+Prior correction was originally developed for ``correcting" or ``unbiasing" predictions from models built on oversampled data. In this case, $P(y=j)$ can be estimated from the oversampled data, and $P(Y=j)$ can be estimated from the whole data prior to oversampling. Alternatively, we can use some population estimates for $P(Y=j)$.
+ 
+However, the method can be used to ``correct" or ``calibrate" our modeled probabilities to any set of pre-specified ``prior" probabilities. This is useful for scaling models built on vended data to a specific bank portfolio. It can also be used to adjust a model to a different long-run average probability or to make estimates more conservative as a way of addressing uncertainty.
+ 
+If the priors for each level of $Y$ are known ahead of time, they can be used directly in \ref{MNL_prior_corrected}. If, however, we have less than $J-1$ levels which are not specified, we need a way to estimate the unspecified $P(Y=j)$. This needs to be done in a way that will preserve $\sum_{j=1}^{J} P(Y=j) = 1$.
+ 
+This could be done in any number of ways. The method proposed below uses the observed posterior probabilities to determine the relationships between the non-specified priors, since those relationships provide the best available information.
+ 
+%%%%%%%%%%%%%%%%%%%%%% Method for Specifying Prior Probabilities from an Incomplete Set 
+\subsection{Method for Specifying Prior Probabilities from an Incomplete Set}
+Let $Y \sim \mathrm{Multinomial}(n=1, p)$ with $p=(p_1, \dots , p_J)$ as the prior probabilities for each $j$ level of $Y$, and let $y \sim \mathrm{Multinomial}(n=1, p^*)$ with $p^* = (p^*_1, \dots p^*_J)$ as the observed posterior probabilities from some observed data used to build a multinomial logit model. All $p^*_j$ are known from the empirical data used to build a model. In some cases, we may only wish to pre-specify some $p_j$ in $p$.
+ 
+Call this subset, $S \subset p$. Let $S_c$ be the complement of $S$, then we have $S \cap S_C = p$, and while each $p_j \in S_c$ is unknown, their sum is known, $\sum_{S_C}p_j = 1 - \sum_{S}p_j$.
+ 
+If we have no other information about $p_j \in S_c$, one reasonable alternative is to use the relative proportions in the corresponding $p^*_j$ and to scale each of these relative proportions by $1 - \sum_{S}p_j$ to ensure $\sum_{j=1}^Jp_j=1$. Then we define each $p_j \in S_c$ as
+\begin{equation}
+p_j = \frac{p^*_j}{\sum_{S_c} p^*_j} \left(1 - \sum_{S}p_j  \right) \label{eq_spec_incomplete}
+\end{equation}
+ 
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Simulated Example %%
+\section{Simulated Example}
+To demonstrate (1) the proposed method of specifying prior probabilities from an incomplete set and (2) the application of prior correction to a multinomial target, we simulate data from a multinomial logistic regression model. Here we simulate data for $J=3$ outcome levels.
+ 
+<<>>=
+#MNL sim
+rm(list=ls(all=T))
+library(nnet)
+ 
+set.seed(42)
+n = 10000
+npreds = 3
+ 
+# simulate multinomial logistic regression data for 3 categories
+x = matrix(rnorm(n*npreds), c(n,npreds))           # random design matrix
+b1 = rnorm(3)/10                                   # true coef beta_1
+b2 = rnorm(3)/10                                   # true coef beta_2
+p1 = exp(x%*%b1)/(1 + exp(x%*%b1) + exp(x%*%b2))   # softmax P(Y=1)
+p2 = exp(x%*%b2)/(1 + exp(x%*%b1) + exp(x%*%b2))   # softmax P(Y=2)
+u = runif(n, min=0, max=1)                          # uniform(0,1)
+y = ifelse((p1+p2)<u, 0,                           # assign Y using probs
+           ifelse(p1<u, 2, 1))
+@
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Fit Model
+\subsection{Fit Model}
+Using the simulated data fit a multinomial model
+<<>>=
+fit = nnet::multinom(y~x)
+@
+ 
+Next we can verify our model fit by comparing our estimated coefficients with our ``true" coefficients. The observed fit does not perfectly match the true parameters, but they fall well within the standard errors.
+ 
+<<>>=
+b1         # true coefs for beta_1
+b2         # true coefs for beta_2
+summary(fit)
+@
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Posterior Probabilities %%%
+\subsection{Posterior Probabilities}
+We next calculate the quantities needed for the correction factors. The posterior probabilities are given by empirical distribution of the target.
+ 
+<<>>=
+## Sample Marginal Probs (Posterior Probabilities)
+post_p = prop.table(table(y))
+s1 = post_p['1']  # posterior probs P(y=j)
+s2 = post_p['2']
+sJ = 1 - s1 - s2
+@
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Posterior Probabilities %%%
+\subsection{Prior Probabilities}
+To demonstrate the method from Section \ref{sect_priorprobs}, we specify a prior probability only for $P(Y=1)$, leaving the remaining levels, $P(Y=2)$ and $P(Y=J)$ to be determined by Equation \ref{eq_spec_incomplete}. In our case, we only need to specify one level, $p_2=P(Y=2)$, and after that the remaining level is given.
+\begin{equation}
+p_2 = \frac{p^*_2}{p^*_2 + p^*_J} \times \left(1 - p_1 \right) \notag
+\end{equation}
+ 
+ 
+<<>>=
+p1 = .15
+p2 = (s2/(s2+sJ))*(1-p1)    # use posteriors to inform unspecified priors
+pJ = 1 - p1 - p2
+prior_p = c(p1, p2, pJ)
+@
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Correction Factors %%%
+\subsection{Correction Factors}
+Once we have specified our prior and posterior probabilities, the correction factors for each binomial component of the multinomial logit are given by Equation \ref{MNL_prior_corrected}.
+ 
+<<>>=
+cf1 = log((p1/pJ)*(sJ/s1))
+cf2 = log((p2/pJ)*(sJ/s2))
+@
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Results
+\subsection{Results}
+Next we calculate the average unadjusted modeled probabilities, then apply the adjustment from Equation \ref{MNL_prior_corrected}, and compare the model output results to the prior and posterior probabilities specified earlier.
+ 
+<<>>=
+# data & estimated coefs
+X = cbind(1, x)
+b1 = coef(fit)[1,]  # fitted coefs from b1  ln(P(y=2)/P(y=J)) = xb1
+b2 = coef(fit)[2,]  # fitted coefs from b2  ln(P(y=2)/P(y=J)) = xb2
+ 
+p_y1 = exp(X%*%b1) / (1 + exp(X%*%b1) + exp(X%*%b2))
+p_y2 = exp(X%*%b2) / (1 + exp(X%*%b1) + exp(X%*%b2))
+p_yJ = 1 - p_y1 - p_y2
+p_y1_adj = exp(X%*%b1 + cf1) / (1 + exp(X%*%b1 + cf1) + exp(X%*%b2 + cf2))
+p_y2_adj = exp(X%*%b2 + cf2) / (1 + exp(X%*%b1 + cf1) + exp(X%*%b2 + cf2))
+p_yJ_adj = 1 - p_y1_adj - p_y2_adj
+ 
+result = data.frame(p_y1, p_y2, p_yJ, p_y1_adj, p_y2_adj, p_yJ_adj)
+@
+ 
+The unadjusted average modeled probabilities are equal to the posterior probabilities given by the empirical distribution of the target, $Y$. Note that here 0 is the reference category, $Y=j$.
+<<>>=
+# review results
+round(colMeans(result)[1:3], 5)   # mean probs
+round(post_p, 5)                  # posterior probs (from empircal Y)
+@
+ 
+More importantly, we find the adjusted average modeled probabilities after prior correction are very close to the the priors we specified above.
+ 
+<<>>=
+round(colMeans(result)[4:6], 5)   # adj mean probs
+round(prior_p, 5)                 # prior probs
+@
+ 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%   Bibliography    %%%%
+\clearpage
+\section{References}
+\printbibliography
+ 
+ 
+ 
+\end{document}
+ 
