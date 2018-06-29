@@ -98,6 +98,9 @@ ENV/
 # mypy
 .mypy_cache/
 
+# R history
+.Rhistory
+
 prior_correction_MNL-blx.bib
 prior_correction_MNL-concordance.tex
 prior_correction_MNL.bbl
